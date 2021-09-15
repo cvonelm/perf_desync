@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -6,10 +7,12 @@
 
 extern "C"
 {
+#include <fcntl.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/perf_event.h>
 #include <poll.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -127,13 +130,30 @@ void read_tracepoints_events()
 
 void compute()
 {
-    while (1)
+
+    //#pragma omp parallel
     {
-        sleep(2);
-        double number = rand() / RAND_MAX;
-        for (int i = 0; i < 100; i++)
+        int fd = open("/tmp", O_TMPFILE | O_SYNC | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR);
+        if (fd < 0)
         {
-            sqrt(number);
+            std::cerr << "could not create temporary file: " << strerror(errno) << std::endl;
+            exit(1);
+        }
+
+        //#pragma omp barrier
+        for (int i = 0; i < 4; i++)
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                //#pragma omp barrier
+                usleep(10);
+            }
+            int ret = fchmod(fd, S_IRUSR | S_IWUSR);
+            if (ret < 0)
+            {
+                std::cerr << "could not fchmod temporary file: " << strerror(errno) << std::endl;
+            }
+            sleep(10);
         }
     }
 }
