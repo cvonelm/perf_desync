@@ -119,7 +119,7 @@ void read_tracepoints_events()
 {
     struct perf_event_attr attr = common_attrs();
     attr.type = PERF_TYPE_TRACEPOINT;
-    attr.config = 316; // sched switch;
+    attr.config = 638; // sched switch;
     attr.sample_id_all = 1;
 
     int fd = perf_event_open(&attr, child_pid, -1, -1, 0);
@@ -135,7 +135,7 @@ void read_tracepoints_events()
 void compute()
 {
 
-    //#pragma omp parallel
+    #pragma omp parallel
     {
         int fd = open("/tmp", O_TMPFILE | O_SYNC | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR);
         if (fd < 0)
@@ -144,12 +144,12 @@ void compute()
             exit(1);
         }
 
-        //#pragma omp barrier
+        #pragma omp barrier
         for (int i = 0; i < 4; i++)
         {
             for (int i = 0; i < 8; i++)
             {
-                //#pragma omp barrier
+                #pragma omp barrier
                 usleep(10);
             }
             int ret = fchmod(fd, S_IRUSR | S_IWUSR);
