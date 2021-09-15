@@ -1,3 +1,5 @@
+#include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -6,12 +8,15 @@
 
 extern "C"
 {
+#include <fcntl.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/perf_event.h>
 #include <poll.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 }
 
@@ -20,6 +25,8 @@ struct perf_record
     struct perf_event_header header;
     uint64_t time;
 };
+
+std::atomic<bool> compute_running;
 
 pid_t child_pid;
 struct perf_event_attr common_attrs()
@@ -69,7 +76,7 @@ void tracing(int fd)
     fds.fd = fd;
     fds.events = POLLIN;
 
-    while (1)
+    while (compute_running)
     {
         poll(&fds, 1, -1);
         auto cur_head = mmap_page->data_head;
@@ -112,7 +119,7 @@ void read_tracepoints_events()
 {
     struct perf_event_attr attr = common_attrs();
     attr.type = PERF_TYPE_TRACEPOINT;
-    attr.config = 316; // sched switch;
+    attr.config = 638; // sched switch;
     attr.sample_id_all = 1;
 
     int fd = perf_event_open(&attr, child_pid, -1, -1, 0);
@@ -127,20 +134,40 @@ void read_tracepoints_events()
 
 void compute()
 {
-    while (1)
+
+    #pragma omp parallel
     {
-        sleep(2);
-        double number = rand() / RAND_MAX;
-        for (int i = 0; i < 100; i++)
+        int fd = open("/tmp", O_TMPFILE | O_SYNC | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR);
+        if (fd < 0)
         {
-            sqrt(number);
+            std::cerr << "could not create temporary file: " << strerror(errno) << std::endl;
+            exit(1);
+        }
+
+        #pragma omp barrier
+        for (int i = 0; i < 4; i++)
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                #pragma omp barrier
+                usleep(10);
+            }
+            int ret = fchmod(fd, S_IRUSR | S_IWUSR);
+            if (ret < 0)
+            {
+                std::cerr << "could not fchmod temporary file: " << strerror(errno) << std::endl;
+            }
+            sleep(10);
         }
     }
+
+    std::cerr << "compute done\n";
 }
 
 int main(void)
 {
     std::cout << "type, tp" << std::endl;
+    compute_running = true;
     pid_t pid = fork();
 
     if (pid == 0)
@@ -152,7 +179,20 @@ int main(void)
         child_pid = pid;
         std::thread t1(read_switch_events);
         std::thread t2(read_tracepoints_events);
+
+        // wait for child exit
+        int wait_status;
+        int wait_ret = waitpid(child_pid, &wait_status, WUNTRACED | WCONTINUED);
+
+        if (-1 == wait_ret)
+        {
+            std::cerr << "could not wait for children, leaving them behind\n";
+            return 1;
+        }
+
+        compute_running = false;
         t1.join();
+        t2.join();
     }
 
     return 0;
