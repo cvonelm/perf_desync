@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 extern "C"
@@ -28,7 +30,10 @@ struct perf_record
 
 std::atomic<bool> compute_running;
 
+std::mutex mutex;
+
 pid_t child_pid;
+
 struct perf_event_attr common_attrs()
 {
     struct perf_event_attr attr;
@@ -44,13 +49,13 @@ struct perf_event_attr common_attrs()
     return attr;
 }
 
-int perf_event_open(struct perf_event_attr* hw_event, pid_t pid, int cpu, int group_fd,
-                    unsigned long flags)
+int perf_event_open(struct perf_event_attr* hw_event)
 {
-    int ret;
+    //One of  those has to be -1;
+    pid_t pid = child_pid;
+    int cpuid = -1;
 
-    ret = syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
-    return ret;
+    return  syscall(__NR_perf_event_open, hw_event, pid, cpuid, -1, 0);
 }
 void tracing(int fd)
 {
@@ -88,6 +93,7 @@ void tracing(int fd)
             if (event_header->type == PERF_RECORD_SWITCH ||
                 event_header->type == PERF_RECORD_SAMPLE)
             {
+                std::lock_guard<std::mutex> lock(mutex);
                 auto event = (struct perf_record*)event_header;
                 std::cout << event->header.type << ", " << event->time << std::endl;
             }
@@ -105,7 +111,7 @@ void read_switch_events()
     attr.sample_id_all = 1;
     attr.context_switch = 1;
 
-    int fd = perf_event_open(&attr, child_pid, -1, -1, 0);
+    int fd = perf_event_open(&attr);
     if (fd == -1)
     {
         std::cerr << strerror(errno) << std::endl;
@@ -117,12 +123,23 @@ void read_switch_events()
 
 void read_tracepoints_events()
 {
+
     struct perf_event_attr attr = common_attrs();
     attr.type = PERF_TYPE_TRACEPOINT;
-    attr.config = 638; // sched switch;
+
+    // the tracepoint id isn't static so we have to look it up every time
+    // sadly this means that this has to be run with root rights even with
+    // kernel.perf_event_paranoid set to -1
+    
+    std::ifstream tp_id_file;
+    tp_id_file.exceptions ( std::ifstream::failbit | std::ifstream::badbit  );
+
+    tp_id_file.open("/sys/kernel/debug/tracing/events/syscalls/sys_enter_fchmod/id");
+    tp_id_file >> attr.config;
+
     attr.sample_id_all = 1;
 
-    int fd = perf_event_open(&attr, child_pid, -1, -1, 0);
+    int fd = perf_event_open(&attr);
     if (fd == -1)
     {
         std::cerr << strerror(errno) << std::endl;
@@ -130,38 +147,6 @@ void read_tracepoints_events()
     }
 
     tracing(fd);
-}
-
-void compute()
-{
-
-    #pragma omp parallel
-    {
-        int fd = open("/tmp", O_TMPFILE | O_SYNC | O_RDWR | O_EXCL, S_IRUSR | S_IWUSR);
-        if (fd < 0)
-        {
-            std::cerr << "could not create temporary file: " << strerror(errno) << std::endl;
-            exit(1);
-        }
-
-        #pragma omp barrier
-        for (int i = 0; i < 4; i++)
-        {
-            for (int i = 0; i < 8; i++)
-            {
-                #pragma omp barrier
-                usleep(10);
-            }
-            int ret = fchmod(fd, S_IRUSR | S_IWUSR);
-            if (ret < 0)
-            {
-                std::cerr << "could not fchmod temporary file: " << strerror(errno) << std::endl;
-            }
-            sleep(10);
-        }
-    }
-
-    std::cerr << "compute done\n";
 }
 
 int main(void)
@@ -172,7 +157,7 @@ int main(void)
 
     if (pid == 0)
     {
-        compute();
+        execlp("./workload", "./workload", NULL);
     }
     else
     {
