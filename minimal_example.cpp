@@ -106,8 +106,9 @@ void tracing(int fd)
 void read_switch_events()
 {
     struct perf_event_attr attr = common_attrs();
-    attr.type = PERF_TYPE_SOFTWARE;
-    attr.config = PERF_COUNT_SW_DUMMY;
+    attr.type = PERF_TYPE_HARDWARE;
+    attr.config = PERF_COUNT_HW_INSTRUCTIONS;
+    attr.sample_period = 11010113;
     attr.sample_id_all = 1;
     attr.context_switch = 1;
 
